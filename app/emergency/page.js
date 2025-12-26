@@ -1,0 +1,1015 @@
+"use client"
+import { useToast } from '@/context/ToastContext';
+import { formatCompatibilityForDisplay } from '@/lib/bloodCompatibility';
+import { CheckCircle, Clock, Droplet, Heart, Loader, MapPin, Navigation, Phone, TriangleAlert, Users, XCircle } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+
+const EmergencyPage = () => {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const { success, error } = useToast();
+  
+  const [formData, setFormData] = useState({
+    patientName: '',
+    contactNumber: '',
+    bloodType: '',
+    unitsRequired: '',
+    hospitalLocation: '',
+    emergencyDetails: '',
+    latitude: null,
+    longitude: null,
+    // Additional fields for non-logged-in users
+    requesterName: '',
+    requesterEmail: '',
+    relationToPatient: ''
+  });
+  
+  const [location, setLocation] = useState({
+    latitude: null,
+    longitude: null,
+    loading: false,
+    error: null,
+    debug: null // detailed error info for troubleshooting (dev use)
+  });
+  
+  const [nearbyBloodBanks, setNearbyBloodBanks] = useState([]);
+  const [selectedBloodBank, setSelectedBloodBank] = useState(null);
+  const [geminiRecommendations, setGeminiRecommendations] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [searchingBloodBanks, setSearchingBloodBanks] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [submittedRequestId, setSubmittedRequestId] = useState('');
+  const [bloodCompatibilityInfo, setBloodCompatibilityInfo] = useState(null);
+
+  // Note: Emergency page accessible to all users (logged in or not)
+  // No authentication redirect for emergency situations
+
+  // Get user's current location (improved error handling & logging)
+  const getCurrentLocation = () => {
+    setLocation(prev => ({ ...prev, loading: true, error: null }));
+
+    // Feature detection
+    if (!('geolocation' in navigator)) {
+      const errMsg = 'Geolocation is not supported by this browser.';
+      console.error(errMsg);
+      setLocation(prev => ({ ...prev, loading: false, error: errMsg }));
+      return;
+    }
+
+    // Geolocation requires secure context (HTTPS) except on localhost
+    if (typeof window !== 'undefined' && !window.isSecureContext && !window.location.hostname.includes('localhost')) {
+      const errMsg = 'Geolocation requires a secure context (HTTPS) or localhost. Access location over HTTPS.';
+      console.error(errMsg);
+      setLocation(prev => ({ ...prev, loading: false, error: errMsg }));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        console.log('Geolocation success:', position);
+        setLocation({ latitude, longitude, loading: false, error: null });
+        setFormData(prev => ({ ...prev, latitude, longitude }));
+      },
+      (error) => {
+        // The geolocation error object may be non-enumerable in some browsers (shows as {}),
+        // so extract known properties explicitly and log extra diagnostics.
+        console.error('Geolocation error (raw):', error);
+
+        let details = {};
+        try {
+          details.name = error && error.name;
+          details.code = error && error.code;
+          details.message = error && error.message;
+          try {
+            details.ownProps = Object.getOwnPropertyNames(error || {});
+          } catch (e) {
+            // ignore
+          }
+          try {
+            details.toString = error && typeof error.toString === 'function' ? error.toString() : undefined;
+          } catch (e) {}
+        } catch (extractErr) {
+          console.error('Failed to extract geolocation error details:', extractErr);
+        }
+
+        console.error('Geolocation error details:', details);
+
+        // Map error codes to user-friendly messages
+        let msg = 'Unable to retrieve your location. (Unknown geolocation error - check console for details)';
+        if (details.code === 1) {
+          msg = 'Permission denied. Please allow location access for this site in your browser settings.';
+        } else if (details.code === 2) {
+          msg = 'Position unavailable. Ensure GPS or network is enabled on your device.';
+        } else if (details.code === 3) {
+          msg = 'Location request timed out. Try again.';
+        } else if (details.message) {
+          msg = details.message;
+        }
+
+        setLocation(prev => ({ ...prev, loading: false, error: msg, debug: details }));
+      },
+      // Increase timeout and request fresh position
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    );
+  };
+
+  // Find nearby blood banks using location and Gemini API
+  const findNearbyBloodBanks = async () => {
+    if (!location.latitude || !location.longitude) {
+      alert('Please get your location first');
+      return;
+    }
+
+    setSearchingBloodBanks(true);
+    try {
+      const response = await fetch('/api/emergency/nearby-bloodbanks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          latitude: location.latitude,
+          longitude: location.longitude,
+          bloodType: formData.bloodType
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setNearbyBloodBanks(data.nearestBloodBanks);
+        setGeminiRecommendations(data.recommendations);
+        
+        // Show feedback about search results
+        const avgDistance = data.nearestBloodBanks.reduce((sum, bank) => sum + bank.distance, 0) / data.nearestBloodBanks.length;
+        console.log(`Found ${data.nearestBloodBanks.length} blood banks. Average distance: ${avgDistance.toFixed(1)}km`);
+        console.log('Sources:', data.sources);
+        
+        let message = `✅ Found ${data.nearestBloodBanks.length} blood banks:\n`;
+        message += `🏦 ${data.sources.database} from verified database\n`;
+        message += `🌐 ${data.sources.google_places} real-time from Google Places\n`;
+        message += `📍 Average distance: ${avgDistance.toFixed(1)}km`;
+        
+        if (data.searchExpanded) {
+          message = '⚠️ Warning: No blood banks found within emergency distance (25km). Showing all available options.\n\n' + message;
+        } else if (avgDistance > 15) {
+          message += '\n\n⚠️ Notice: Blood banks are relatively far. Consider calling emergency services (108) for immediate assistance.';
+        }
+        
+        alert(message);
+      } else {
+        alert('Failed to find nearby blood banks: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Error finding blood banks:', error);
+      alert('Failed to find nearby blood banks');
+    } finally {
+      setSearchingBloodBanks(false);
+    }
+  };
+
+  // Handle form input changes
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+    
+    // Update blood compatibility info when blood type changes
+    if (name === 'bloodType' && value) {
+      const compatibilityInfo = formatCompatibilityForDisplay(value);
+      setBloodCompatibilityInfo(compatibilityInfo);
+    } else if (name === 'bloodType' && !value) {
+      setBloodCompatibilityInfo(null);
+    }
+  };
+
+  // Handle form submission
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!selectedBloodBank) {
+      error('Please select a blood bank first');
+      return;
+    }
+
+    // Validate additional fields for non-logged-in users
+    if (!session && (!formData.requesterName || !formData.requesterEmail || !formData.relationToPatient)) {
+      error('Please fill all requester details');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const response = await fetch('/api/emergency/request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...formData,
+          selectedBloodBankId: selectedBloodBank._id,
+          isLoggedIn: !!session,
+          userEmail: session?.user?.email || formData.requesterEmail
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        // Store request ID and show success modal
+        setSubmittedRequestId(data.requestId);
+        setShowSuccessModal(true);
+        
+        // Show success toast
+        success('🚨 Emergency request submitted successfully! Blood bank has been notified.');
+        
+        // Reset form
+        setFormData({
+          patientName: '',
+          contactNumber: '',
+          bloodType: '',
+          unitsRequired: '',
+          hospitalLocation: '',
+          emergencyDetails: '',
+          latitude: null,
+          longitude: null,
+          requesterName: '',
+          requesterEmail: '',
+          relationToPatient: ''
+        });
+        setSelectedBloodBank(null);
+        setNearbyBloodBanks([]);
+        setGeminiRecommendations('');
+      } else {
+        error('Failed to submit request: ' + data.error);
+      }
+    } catch (err) {
+      console.error('Error submitting request:', err);
+      error('Failed to submit emergency request. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Handle success modal actions
+  const handleTrackRequest = () => {
+    setShowSuccessModal(false);
+    if (session) {
+      router.push('/my-requests');
+    } else {
+      router.push('/login');
+    }
+  };
+
+  const handleCreateAccount = () => {
+    setShowSuccessModal(false);
+    router.push('/register');
+  };
+
+  const handleStayOnPage = () => {
+    setShowSuccessModal(false);
+  };
+
+  // Show loading only if session is still loading, but allow access without session
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-[#ef4444]"></div>
+      </div>
+    );
+  }
+
+  // Remove the session requirement - emergency accessible to all
+
+  return (
+    <div className="min-h-screen bg-[var(--background)] py-8">
+      <div className="container mx-auto px-4 max-w-4xl">
+        {/* Emergency Header */}
+        <div className="text-center mb-8">
+          <div className="bg-[#ef4444] text-white p-4 rounded-lg mb-6">
+            <TriangleAlert className="h-16 w-16 mx-auto mb-4" />
+            <h1 className="text-4xl font-bold mb-2">Emergency Blood Request</h1>
+            <p className="text-xl opacity-90">Request urgent blood supply for critical situations</p>
+          </div>
+        </div>
+        
+        {/* Emergency Info Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-[var(--card-background)] p-6 rounded-lg border border-[var(--border-color)] text-center">
+            <Phone className="h-12 w-12 text-[#ef4444] mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Emergency Hotline</h3>
+            <p className="text-2xl font-bold text-[#ef4444] mb-2">108</p>
+            <p className="text-sm text-[var(--text-secondary)]">Available 24/7</p>
+          </div>
+          
+          <div className="bg-[var(--card-background)] p-6 rounded-lg border border-[var(--border-color)] text-center">
+            <Clock className="h-12 w-12 text-[#ef4444] mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Response Time</h3>
+            <p className="text-2xl font-bold text-[#ef4444] mb-2">&lt; 30 min</p>
+            <p className="text-sm text-[var(--text-secondary)]">Average response</p>
+          </div>
+          
+          <div className="bg-[var(--card-background)] p-6 rounded-lg border border-[var(--border-color)] text-center">
+            <Users className="h-12 w-12 text-[#ef4444] mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Available Donors</h3>
+            <p className="text-2xl font-bold text-[#ef4444] mb-2">1,200+</p>
+            <p className="text-sm text-[var(--text-secondary)]">Ready to help</p>
+          </div>
+        </div>
+
+        {/* Location Section */}
+        <div className="bg-[var(--card-background)] p-6 rounded-lg border border-[var(--border-color)] mb-6">
+          <div className="flex items-center mb-4">
+            <MapPin className="h-6 w-6 text-[#ef4444] mr-2" />
+            <h2 className="text-xl font-bold text-[var(--text-primary)]">Your Location</h2>
+          </div>
+          
+          <div className="flex flex-col sm:flex-row gap-4 items-start">
+            <button
+              onClick={getCurrentLocation}
+              disabled={location.loading}
+              className="flex items-center gap-2 bg-[#ef4444] text-white px-6 py-3 rounded-lg font-semibold hover:bg-[#ef4444]/90 transition-colors disabled:opacity-50"
+            >
+              {location.loading ? (
+                <Loader className="h-5 w-5 animate-spin" />
+              ) : (
+                <Navigation className="h-5 w-5" />
+              )}
+              {location.loading ? 'Getting Location...' : 'Get My Location'}
+            </button>
+            
+            {location.latitude && location.longitude && (
+              <div className="text-sm text-[var(--text-secondary)]">
+                <p>Latitude: {location.latitude.toFixed(6)}</p>
+                <p>Longitude: {location.longitude.toFixed(6)}</p>
+              </div>
+            )}
+            
+            {location.error && (
+              <div>
+                <p className="text-red-500 text-sm">{location.error}</p>
+                {location.debug && (
+                  <pre className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words">Debug: {JSON.stringify(location.debug)}</pre>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Emergency Request Form */}
+        <div className="bg-[var(--card-background)] p-8 rounded-lg border border-[var(--border-color)]">
+          <div className="flex items-center mb-6">
+            <TriangleAlert className="h-6 w-6 text-[#ef4444] mr-2" />
+            <h2 className="text-2xl font-bold text-[var(--text-primary)]">Submit Emergency Request</h2>
+          </div>
+
+          {/* User Status Indicator */}
+          <div className="mb-6 p-4 rounded-lg border border-[var(--border-color)]">
+            {session ? (
+              <div className="flex items-center text-green-600">
+                <div className="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
+                <span className="text-sm font-medium">Logged in as {session.user?.email}</span>
+              </div>
+            ) : (
+              <div className="flex items-center text-blue-600">
+                <div className="w-3 h-3 bg-blue-500 rounded-full mr-2"></div>
+                <span className="text-sm font-medium">Emergency Access - Additional requester information required</span>
+              </div>
+            )}
+          </div>
+          
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Additional fields for non-logged-in users */}
+            {!session && (
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-lg border border-blue-200 dark:border-blue-800 mb-6">
+                <h3 className="text-lg font-semibold text-blue-800 dark:text-blue-200 mb-4">Requester Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">
+                      Your Name *
+                    </label>
+                    <input 
+                      type="text" 
+                      name="requesterName"
+                      value={formData.requesterName}
+                      onChange={handleInputChange}
+                      required
+                      className="w-full px-4 py-3 rounded-lg border border-blue-300 dark:border-blue-600 bg-white dark:bg-blue-900/50 text-blue-900 dark:text-blue-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Enter your full name"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">
+                      Your Email *
+                    </label>
+                    <input 
+                      type="email" 
+                      name="requesterEmail"
+                      value={formData.requesterEmail}
+                      onChange={handleInputChange}
+                      required
+                      className="w-full px-4 py-3 rounded-lg border border-blue-300 dark:border-blue-600 bg-white dark:bg-blue-900/50 text-blue-900 dark:text-blue-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Enter your email address"
+                    />
+                  </div>
+                  
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">
+                      Relation to Patient *
+                    </label>
+                    <select 
+                      name="relationToPatient"
+                      value={formData.relationToPatient}
+                      onChange={handleInputChange}
+                      required
+                      className="w-full px-4 py-3 rounded-lg border border-blue-300 dark:border-blue-600 bg-white dark:bg-blue-900/50 text-blue-900 dark:text-blue-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">Select your relation to patient</option>
+                      <option value="self">Self (I am the patient)</option>
+                      <option value="family">Family Member</option>
+                      <option value="friend">Friend</option>
+                      <option value="medical_staff">Medical Staff</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                  Patient Name *
+                </label>
+                <input 
+                  type="text" 
+                  name="patientName"
+                  value={formData.patientName}
+                  onChange={handleInputChange}
+                  required
+                  className="w-full px-4 py-3 rounded-lg border border-[var(--border-color)] bg-[var(--background)] text-[var(--text-primary)] focus:ring-2 focus:ring-[#ef4444] focus:border-transparent"
+                  placeholder="Enter patient's full name"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                  Contact Number *
+                </label>
+                <input 
+                  type="tel" 
+                  name="contactNumber"
+                  value={formData.contactNumber}
+                  onChange={handleInputChange}
+                  required
+                  className="w-full px-4 py-3 rounded-lg border border-[var(--border-color)] bg-[var(--background)] text-[var(--text-primary)] focus:ring-2 focus:ring-[#ef4444] focus:border-transparent"
+                  placeholder="Enter contact number"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                  Blood Type *
+                </label>
+                <select 
+                  name="bloodType"
+                  value={formData.bloodType}
+                  onChange={handleInputChange}
+                  required
+                  className="w-full px-4 py-3 rounded-lg border border-[var(--border-color)] bg-[var(--background)] text-[var(--text-primary)] focus:ring-2 focus:ring-[#ef4444] focus:border-transparent"
+                >
+                  <option value="">Select blood type</option>
+                  <option value="A+">A+</option>
+                  <option value="A-">A-</option>
+                  <option value="B+">B+</option>
+                  <option value="B-">B-</option>
+                  <option value="AB+">AB+</option>
+                  <option value="AB-">AB-</option>
+                  <option value="O+">O+</option>
+                  <option value="O-">O-</option>
+                </select>
+                
+                {/* Blood Compatibility Display */}
+                {bloodCompatibilityInfo && (
+                  <div className="mt-4 p-5 bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 border border-blue-200 dark:border-blue-700 rounded-xl shadow-sm">
+                    <div className="flex items-center space-x-3 mb-3">
+                      <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+                        <Droplet className="h-5 w-5 text-red-600 dark:text-red-400" />
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-semibold text-blue-900 dark:text-blue-100">Blood Compatibility</h4>
+                        <p className="text-sm text-blue-700 dark:text-blue-300">{bloodCompatibilityInfo.description}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <div className="flex items-center space-x-2 mb-3">
+                          <Heart className="h-4 w-4 text-red-500" />
+                          <span className="text-sm font-semibold text-blue-800 dark:text-blue-200">Compatible Blood Types</span>
+                          <span className="text-xs bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200 px-2 py-0.5 rounded-full">
+                            {bloodCompatibilityInfo.compatibilityCount} types
+                          </span>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {bloodCompatibilityInfo.compatibleTypes.map((type, index) => (
+                            <div 
+                              key={index}
+                              className={`relative p-3 rounded-lg text-center font-medium transition-all duration-200 hover:scale-105 ${
+                                type === formData.bloodType 
+                                  ? 'bg-gradient-to-br from-red-100 to-red-200 dark:from-red-900/50 dark:to-red-800/50 text-red-800 dark:text-red-200 border-2 border-red-300 dark:border-red-600 shadow-md' 
+                                  : 'bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-500'
+                              }`}
+                            >
+                              {type === formData.bloodType && (
+                                <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
+                                  <span className="text-white text-xs">★</span>
+                                </div>
+                              )}
+                              <div className="text-lg font-bold">{type}</div>
+                              <div className="text-xs opacity-75">
+                                {type === formData.bloodType ? 'Your Type' : 'Compatible'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      {bloodCompatibilityInfo.alternatives.length > 0 && (
+                        <div className="bg-blue-100 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-200 dark:border-blue-700">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                            <span className="text-sm font-medium text-blue-800 dark:text-blue-200">Alternative Options</span>
+                          </div>
+                          <p className="text-sm text-blue-700 dark:text-blue-300">
+                            {bloodCompatibilityInfo.alternatives.join(' • ')}
+                          </p>
+                        </div>
+                      )}
+                      
+                      {bloodCompatibilityInfo.isUniversalRecipient && (
+                        <div className="bg-gradient-to-r from-green-100 to-emerald-100 dark:from-green-900/30 dark:to-emerald-900/30 p-3 rounded-lg border border-green-200 dark:border-green-700">
+                          <div className="flex items-center space-x-2">
+                            <div className="p-1 bg-green-500 rounded-full">
+                              <Heart className="h-3 w-3 text-white" />
+                            </div>
+                            <span className="text-sm font-semibold text-green-800 dark:text-green-200">Universal Recipient</span>
+                          </div>
+                          <p className="text-xs text-green-700 dark:text-green-300 mt-1">You can receive blood from any donor type</p>
+                        </div>
+                      )}
+                      
+                      {bloodCompatibilityInfo.isUniversalDonor && (
+                        <div className="bg-gradient-to-r from-orange-100 to-amber-100 dark:from-orange-900/30 dark:to-amber-900/30 p-3 rounded-lg border border-orange-200 dark:border-orange-700">
+                          <div className="flex items-center space-x-2">
+                            <div className="p-1 bg-orange-500 rounded-full">
+                              <Heart className="h-3 w-3 text-white" />
+                            </div>
+                            <span className="text-sm font-semibold text-orange-800 dark:text-orange-200">Universal Donor Type</span>
+                          </div>
+                          <p className="text-xs text-orange-700 dark:text-orange-300 mt-1">Your blood type is very valuable for donations</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                  Units Required *
+                </label>
+                <input 
+                  type="number" 
+                  name="unitsRequired"
+                  value={formData.unitsRequired}
+                  onChange={handleInputChange}
+                  min="1"
+                  max="10"
+                  required
+                  className="w-full px-4 py-3 rounded-lg border border-[var(--border-color)] bg-[var(--background)] text-[var(--text-primary)] focus:ring-2 focus:ring-[#ef4444] focus:border-transparent"
+                  placeholder="Number of units"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                Hospital/Location *
+              </label>
+              <input 
+                type="text" 
+                name="hospitalLocation"
+                value={formData.hospitalLocation}
+                onChange={handleInputChange}
+                required
+                className="w-full px-4 py-3 rounded-lg border border-[var(--border-color)] bg-[var(--background)] text-[var(--text-primary)] focus:ring-2 focus:ring-[#ef4444] focus:border-transparent"
+                placeholder="Hospital name or location"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                Emergency Details *
+              </label>
+              <textarea 
+                rows="4"
+                name="emergencyDetails"
+                value={formData.emergencyDetails}
+                onChange={handleInputChange}
+                required
+                className="w-full px-4 py-3 rounded-lg border border-[var(--border-color)] bg-[var(--background)] text-[var(--text-primary)] focus:ring-2 focus:ring-[#ef4444] focus:border-transparent"
+                placeholder="Describe the emergency situation and urgency level"
+              ></textarea>
+            </div>
+
+            {/* Find Blood Banks Button */}
+            <div className="flex justify-center">
+              <button 
+                type="button"
+                onClick={findNearbyBloodBanks}
+                disabled={!location.latitude || !formData.bloodType || searchingBloodBanks}
+                className="bg-blue-500 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {searchingBloodBanks ? (
+                  <Loader className="h-5 w-5 animate-spin" />
+                ) : (
+                  <MapPin className="h-5 w-5" />
+                )}
+                {searchingBloodBanks ? 'Finding Blood Banks...' : 'Find Nearby Blood Banks'}
+              </button>
+            </div>
+
+            {/* Nearby Blood Banks Results */}
+            {nearbyBloodBanks.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">
+                    Emergency Blood Banks ({nearbyBloodBanks.length} found)
+                  </h3>
+                  {nearbyBloodBanks.some(bank => bank.distance > 20) && (
+                    <div className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
+                      ⚠️ Some banks are far for emergency
+                    </div>
+                  )}
+                </div>
+                
+                {/* Gemini AI Recommendations */}
+                {geminiRecommendations && (
+                  <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+                    <h4 className="font-semibold text-blue-800 dark:text-blue-200 mb-2">🤖 AI Emergency Recommendations</h4>
+                    <div className="text-sm text-blue-700 dark:text-blue-300 whitespace-pre-wrap">
+                      {geminiRecommendations}
+                    </div>
+                  </div>
+                )}
+                
+                <div className="grid gap-4">
+                  {nearbyBloodBanks.map((bank, index) => (
+                    <div 
+                      key={bank._id}
+                      className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                        selectedBloodBank?._id === bank._id 
+                          ? 'border-[#ef4444] bg-[#ef4444]/10' 
+                          : 'border-[var(--border-color)] hover:border-[#ef4444]/50'
+                      }`}
+                      onClick={() => setSelectedBloodBank(bank)}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h4 className="font-semibold text-[var(--text-primary)]">{bank.name}</h4>
+                            
+                            {/* Source Badge */}
+                            {bank.source === 'database' ? (
+                              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded font-medium">
+                                🏦 VERIFIED
+                              </span>
+                            ) : (
+                              <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-medium">
+                                🌐 REAL-TIME
+                              </span>
+                            )}
+                            
+                            {/* Distance Badge */}
+                            {bank.distance <= 10 && (
+                              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">NEAR</span>
+                            )}
+                            {bank.distance > 20 && (
+                              <span className="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded">FAR</span>
+                            )}
+                          </div>
+                          
+                          <p className="text-sm text-[var(--text-secondary)] mt-1">{bank.address}</p>
+                          <p className="text-sm text-[var(--text-secondary)]">📞 {bank.contact_number}</p>
+                          
+                          {/* Google Rating for real-time banks */}
+                          {bank.rating && (
+                            <p className="text-sm text-yellow-600 mt-1">
+                              ⭐ {bank.rating}/5 Google Rating
+                            </p>
+                          )}
+                          
+                          {/* Blood Type Availability */}
+                          {formData.bloodType && (
+                            <div className="mt-4 space-y-3">
+                              {bank.source === 'database' ? (
+                                <div className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 p-4 rounded-xl border border-gray-200 dark:border-gray-700">
+                                  {/* Exact Match Status */}
+                                  <div className="flex items-center justify-between mb-3">
+                                    {bank.hasRequestedBloodType ? (
+                                      <div className="flex items-center space-x-3">
+                                        <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
+                                          <CheckCircle className="h-5 w-5 text-green-600 dark:text-green-400" />
+                                        </div>
+                                        <div>
+                                          <div className="font-semibold text-green-800 dark:text-green-200">
+                                            {formData.bloodType} Available
+                                          </div>
+                                          <div className="text-sm text-green-600 dark:text-green-400">
+                                            {bank.availableUnits} units in stock
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center space-x-3">
+                                        <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+                                          <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+                                        </div>
+                                        <div>
+                                          <div className="font-semibold text-red-800 dark:text-red-200">
+                                            {formData.bloodType} Not Available
+                                          </div>
+                                          <div className="text-sm text-red-600 dark:text-red-400">
+                                            Exact match not in stock
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  {/* Compatible Types */}
+                                  {bank.compatibleInventory && bank.compatibleInventory.length > 0 && (
+                                    <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
+                                      <div className="flex items-center space-x-2 mb-3">
+                                        <Droplet className="h-4 w-4 text-blue-500" />
+                                        <span className="text-sm font-semibold text-blue-800 dark:text-blue-200">Compatible Types Available</span>
+                                      </div>
+                                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                                        {bank.compatibleInventory.map((inv, idx) => (
+                                          <div 
+                                            key={idx}
+                                            className={`p-2 rounded-lg text-center border transition-all duration-200 ${
+                                              inv.isExactMatch 
+                                                ? 'bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 border-green-300 dark:border-green-600' 
+                                                : 'bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 border-blue-300 dark:border-blue-600 hover:from-blue-100 hover:to-blue-200'
+                                            }`}
+                                          >
+                                            <div className="flex items-center justify-center space-x-1">
+                                              {inv.isExactMatch && <span className="text-green-600 text-xs">★</span>}
+                                              <span className={`font-bold text-sm ${
+                                                inv.isExactMatch 
+                                                  ? 'text-green-700 dark:text-green-300' 
+                                                  : 'text-blue-700 dark:text-blue-300'
+                                              }`}>
+                                                {inv.blood_type}
+                                              </span>
+                                            </div>
+                                            <div className={`text-xs ${
+                                              inv.isExactMatch 
+                                                ? 'text-green-600 dark:text-green-400' 
+                                                : 'text-blue-600 dark:text-blue-400'
+                                            }`}>
+                                              {inv.units_available} units
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                      <div className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg">
+                                        <div className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                                          Total Compatible: {bank.totalCompatibleUnits} units
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                  
+                                  {!bank.hasRequestedBloodType && !bank.hasCompatibleBloodType && (
+                                    <div className="bg-gradient-to-r from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800 p-3 rounded-lg border border-gray-300 dark:border-gray-600">
+                                      <div className="flex items-center space-x-2">
+                                        <Phone className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                                        <span className="font-medium text-gray-800 dark:text-gray-200">Contact Required</span>
+                                      </div>
+                                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                                        No compatible blood types currently in database - Call to verify availability
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-700">
+                                  <div className="flex items-center space-x-3">
+                                    <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                                      <Phone className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                                    </div>
+                                    <div>
+                                      <div className="font-semibold text-blue-800 dark:text-blue-200">
+                                        {formData.bloodType} - Call to Confirm
+                                      </div>
+                                      <div className="text-sm text-blue-600 dark:text-blue-400">
+                                        Real-time data - Contact blood bank directly for availability
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          
+                          {/* Emergency Priority */}
+                          <div className="mt-1 text-xs">
+                            Priority: {
+                              bank.source === 'database' && bank.distance <= 10 && bank.hasRequestedBloodType ? 
+                                <span className="text-green-600 font-medium">HIGHEST</span> :
+                              bank.distance <= 10 ? 
+                                <span className="text-green-600 font-medium">HIGH</span> :
+                              bank.distance <= 20 ? 
+                                <span className="text-yellow-600">MEDIUM</span> :
+                                <span className="text-orange-600">LOW</span>
+                            }
+                          </div>
+                          
+                          {/* Data Source Info */}
+                          <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                            {bank.source === 'database' ? 
+                              '🏦 From trusted database - Inventory confirmed' : 
+                              '🌐 Real-time from Google Places - Call to verify'
+                            }
+                          </div>
+                        </div>
+                        
+                        <div className="text-right ml-4">
+                          <p className={`text-sm font-medium ${
+                            bank.distance <= 10 ? 'text-green-600' : 
+                            bank.distance <= 20 ? 'text-yellow-600' : 'text-orange-600'
+                          }`}>
+                            {bank.distance.toFixed(1)} km
+                          </p>
+                          <p className="text-xs text-[var(--text-secondary)]">
+                            ~{Math.round(bank.distance * 2)} min drive
+                          </p>
+                          {selectedBloodBank?._id === bank._id && (
+                            <p className="text-xs text-green-600 mt-1 font-medium">✓ SELECTED</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-4">
+              <button 
+                type="submit"
+                disabled={!selectedBloodBank || submitting}
+                className="flex-1 bg-[#ef4444] text-white py-3 px-6 rounded-lg font-semibold hover:bg-[#ef4444]/90 transition-colors flex items-center justify-center disabled:opacity-50"
+              >
+                {submitting ? (
+                  <Loader className="h-5 w-5 mr-2 animate-spin" />
+                ) : (
+                  <TriangleAlert className="h-5 w-5 mr-2" />
+                )}
+                {submitting ? 'Submitting...' : 'Submit Emergency Request'}
+              </button>
+              
+              <button 
+                type="button"
+                className="flex-1 bg-[var(--background)] text-[var(--text-primary)] py-3 px-6 rounded-lg font-semibold border border-[var(--border-color)] hover:bg-[var(--card-background)] transition-colors flex items-center justify-center"
+              >
+                <Phone className="h-5 w-5 mr-2" />
+                Call Emergency Hotline
+              </button>
+            </div>
+          </form>
+
+          <div className="mt-6 p-4 bg-[#ef4444]/10 rounded-lg border border-[#ef4444]/20">
+            <div className="flex items-start">
+              <TriangleAlert className="h-5 w-5 text-[#ef4444] mr-2 mt-0.5 flex-shrink-0" />
+              <div>
+                <h4 className="font-semibold text-[var(--text-primary)] mb-1">Important Note</h4>
+                <p className="text-sm text-[var(--text-secondary)]">
+                  This form is for emergency blood requests only. For non-urgent requests, please contact your nearest blood bank directly. 
+                  Emergency requests are processed with highest priority and will be shared with all available donors in your area.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Login suggestion for non-logged-in users */}
+          {!session && (
+            <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="flex items-start">
+                <div className="w-5 h-5 bg-blue-500 rounded-full mr-2 mt-0.5 flex-shrink-0 flex items-center justify-center">
+                  <span className="text-white text-xs">i</span>
+                </div>
+                <div>
+                  <h4 className="font-semibold text-blue-800 dark:text-blue-200 mb-1">For Better Experience</h4>
+                  <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
+                    Consider creating an account for faster emergency requests, tracking your requests, and accessing additional features.
+                  </p>
+                  <div className="flex gap-2">
+                    <Link href="/login" className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 transition-colors">
+                      Login
+                    </Link>
+                    <Link href="/register" className="text-sm border border-blue-600 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors">
+                      Sign Up
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Success Modal */}
+      {showSuccessModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6 shadow-xl">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto mb-4">
+                <CheckCircle className="w-8 h-8 text-green-600 dark:text-green-400" />
+              </div>
+              <h3 className="text-xl font-bold text-[var(--text-primary)] mb-2">
+                Request Submitted Successfully!
+              </h3>
+              <p className="text-[var(--text-secondary)] mb-4">
+                Your emergency blood request has been sent to the blood bank.
+              </p>
+              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 mb-4">
+                <p className="text-sm text-[var(--text-secondary)]">Request ID:</p>
+                <p className="font-mono text-lg font-bold text-[var(--text-primary)]">
+                  {submittedRequestId}
+                </p>
+              </div>
+            </div>
+
+            {session ? (
+              // Logged-in user options
+              <div className="space-y-3">
+                <Link href="/track-request">
+                  <button className="w-full bg-[#ef4444] hover:bg-[#ef4444]/90 text-white px-4 py-3 rounded-lg font-medium transition-colors flex items-center justify-center space-x-2">
+                    <TriangleAlert className="w-4 h-4" />
+                    <span>Track Request Status</span>
+                  </button>
+                </Link>
+                <button
+                  onClick={handleStayOnPage}
+                  className="w-full border border-[var(--border-color)] text-[var(--text-primary)] px-4 py-3 rounded-lg font-medium hover:bg-[var(--card-background)] transition-colors"
+                >
+                  Submit Another Request
+                </button>
+              </div>
+            ) : (
+              // Non-logged-in user options
+              <div className="space-y-3">
+                <div className="text-sm text-[var(--text-secondary)] mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                  <p className="font-medium text-blue-800 dark:text-blue-200 mb-2">💡 Track Your Request</p>
+                  <p>You can track your request status using the general tracking page!</p>
+                </div>
+                <Link href="/track-request">
+                  <button className="w-full bg-[#ef4444] hover:bg-[#ef4444]/90 text-white px-4 py-3 rounded-lg font-medium transition-colors flex items-center justify-center space-x-2">
+                    <TriangleAlert className="w-4 h-4" />
+                    <span>Track Status</span>
+                  </button>
+                </Link>
+                <button
+                  onClick={handleCreateAccount}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-3 rounded-lg font-medium transition-colors flex items-center justify-center space-x-2"
+                >
+                  <Users className="w-4 h-4" />
+                  <span>Create Account</span>
+                </button>
+                <button
+                  onClick={handleStayOnPage}
+                  className="w-full border border-[var(--border-color)] text-[var(--text-primary)] px-4 py-3 rounded-lg font-medium hover:bg-[var(--card-background)] transition-colors"
+                >
+                  Continue Without Account
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default EmergencyPage;
