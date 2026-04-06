@@ -1,0 +1,49 @@
+erDiagram
+    USER ||--o{ DONOR : extends
+    USER ||--o{ HOSPITAL : extends
+    USER ||--o{ BLOODBANK : extends
+
+    BLOODREQUEST }o--|| USER : requester
+    BLOODREQUEST }o--|| BLOODINVENTORY : matches
+
+    BLOODINVENTORY }o--|| BLOODBANK : "belongs_to"
+    INVENTORYLOG }o--|| BLOODBANK : "for"
+    DONATIONDRIVE }o--|| BLOODBANK : "hosted_by"
+    DONOR ||--o{ DONORCONTACTREQUEST : "contact_requests"
+
+    USER {
+      ObjectId _id
+      String email
+      erDiagram
+          USER ||--o{ DONOR : extends
+          USER ||--o{ HOSPITAL : extends
+          USER ||--o{ BLOODBANK : extends
+
+          BLOODREQUEST }o--|| USER : requester
+          BLOODREQUEST }o--|| BLOODINVENTORY : matches
+
+          BLOODINVENTORY }o--|| BLOODBANK : "belongs_to"
+          INVENTORYLOG }o--|| BLOODBANK : "for"
+          DONATIONDRIVE }o--|| BLOODBANK : "hosted_by"
+          DONOR ||--o{ DONORCONTACTREQUEST : "contact_requests"
+
+          %% Field hints (for reference)
+          USER {
+            ObjectId _id
+            String email
+            String name
+            Enum role
+          }
+          BLOODREQUEST {
+            ObjectId _id
+            String blood_type
+            String rh_factor
+            Number quantity
+            Enum status
+          }
+          BLOODINVENTORY {
+            ObjectId _id
+            Number quantity
+            Date last_updated
+          }
+            Number quantity

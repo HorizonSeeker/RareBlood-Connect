@@ -1,0 +1,7 @@
+flowchart LR
+  H[Hospital] --> U1((Create Blood Request))
+  B[Blood Bank] --> U2((Manage Inventory))
+  D[Donor] --> U3((Register Donation))
+  D --> U4((Receive Notifications))
+  B --> U4
+  A[Admin] --> U2

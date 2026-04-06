@@ -1,0 +1,8 @@
+stateDiagram
+  [*] --> PENDING
+  PENDING --> ACCEPTED : accept
+  PENDING --> EXPIRED : expire
+  ACCEPTED --> FULFILLED : fulfill
+  ACCEPTED --> CANCELLED : cancel
+  FULFILLED --> [*]
+  CANCELLED --> [*]

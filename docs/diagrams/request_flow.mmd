@@ -1,0 +1,7 @@
+flowchart LR
+  Hospital-->|Create Request| BloodRequest
+  BloodRequest -->|Find nearby blood banks| GeoSearch
+  GeoSearch -->|Notify| BloodBank
+  BloodBank -->|"Respond (accept/decline)"| BloodRequest
+  BloodRequest -->|"If accepted"| Fulfillment
+  Fulfillment -->|Update inventory| BloodInventory

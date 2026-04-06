@@ -1,0 +1,7 @@
+flowchart LR
+  PENDING -->|accept| ACCEPTED
+  PENDING -->|expire| EXPIRED
+  ACCEPTED -->|fulfill| FULFILLED
+  ACCEPTED -->|cancel| CANCELLED
+  FULFILLED -->|end| DONE([Done])
+  CANCELLED -->|end| DONE

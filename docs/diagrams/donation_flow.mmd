@@ -1,0 +1,7 @@
+flowchart LR
+  Donor[Donor] -->|Register / Login| App
+  Donor -->|Register for drive| DonationDrive
+  DonationDrive -->|Confirm| BloodBank
+  Donor -->|Arrive at donation site| BloodBank
+  BloodBank -->|Update inventory| BloodInventory
+  BloodInventory -->|Write log| InventoryLog

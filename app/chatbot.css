@@ -1,0 +1,188 @@
+/* Chatbot specific styles */
+.chatbot-container {
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+/* Responsive chatbot positioning and sizing - Fixed */
+@media (max-height: 700px) {
+  .chatbot-container {
+    max-height: calc(100vh - 3rem) !important;
+    height: auto !important;
+  }
+}
+
+@media (max-height: 600px) {
+  .chatbot-container {
+    max-height: calc(100vh - 2rem) !important;
+    height: auto !important;
+  }
+}
+
+@media (max-height: 500px) {
+  .chatbot-container {
+    max-height: calc(100vh - 1rem) !important;
+    height: auto !important;
+  }
+}
+
+/* Remove problematic mobile width overrides */
+@media (max-width: 480px) {
+  .chatbot-container {
+    max-width: calc(100vw - 2rem) !important;
+  }
+}
+
+/* Enhanced animations for chatbot */
+.chatbot-slide-in {
+  /* Animation disabled */
+}
+
+.chatbot-fade-in {
+  /* Animation disabled */
+}
+
+.chatbot-bounce {
+  /* Animation disabled */
+}
+
+/* New enhanced animations */
+.floating-btn-pulse {
+  /* Animation disabled */
+}
+
+.quick-action-hover {
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.gradient-bg-animate {
+  background-size: 200% 200%;
+  /* Animation disabled */
+}
+
+/* Animations disabled */
+/*
+@keyframes slideInFromRight { disabled }
+@keyframes fadeIn { disabled }
+@keyframes bounce { disabled }
+@keyframes floatingPulse { disabled }
+@keyframes gradientShift { disabled }
+*/
+
+/* Custom scrollbar for chat messages */
+.chatbot-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chatbot-messages::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 3px;
+}
+
+.chatbot-messages::-webkit-scrollbar-thumb {
+  background: rgba(239, 68, 68, 0.5);
+  border-radius: 3px;
+}
+
+.chatbot-messages::-webkit-scrollbar-thumb:hover {
+  background: rgba(239, 68, 68, 0.7);
+}
+
+/* Dark theme specific adjustments */
+.dark .chatbot-messages::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dark .chatbot-messages::-webkit-scrollbar-thumb {
+  background: rgba(239, 68, 68, 0.6);
+}
+
+/* Message animation - disabled */
+.message-enter {
+  /* Animation disabled */
+}
+
+/* Typing indicator dots animation - disabled */
+.typing-dot {
+  /* Animation disabled */
+}
+
+.typing-dot:nth-child(1) {
+  /* Animation delay disabled */
+}
+
+.typing-dot:nth-child(2) {
+  /* Animation delay disabled */
+}
+
+/* Quick action buttons hover effect */
+.quick-action-btn {
+  transition: all 0.2s ease;
+}
+
+.quick-action-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+}
+
+/* Floating button pulse effect - disabled */
+.floating-btn-pulse {
+  position: relative;
+}
+
+.floating-btn-pulse::before {
+  display: none;
+  /* Pulse animation disabled */
+}
+
+/* Mobile responsive adjustments - Simplified */
+@media (max-width: 640px) {
+  .chatbot-container {
+    max-width: calc(100vw - 2rem) !important;
+    max-height: calc(100vh - 4rem) !important;
+    height: auto !important;
+  }
+  
+  .quick-action-btn {
+    font-size: 0.75rem;
+    padding: 0.5rem 0.75rem;
+  }
+}
+
+/* Ensure chatbot doesn't interfere with taskbar */
+@media (max-width: 1024px) {
+  .fixed.bottom-20 {
+    bottom: 5rem !important;
+  }
+}
+
+/* Windows taskbar consideration - Simplified */
+@media (max-height: 800px) {
+  .chatbot-container {
+    max-height: calc(100vh - 3rem) !important;
+  }
+}
+
+/* Accessibility improvements */
+.chatbot-focus:focus {
+  outline: 2px solid #ef4444;
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .chatbot-container {
+    border-width: 2px;
+  }
+  
+  .message-user {
+    background: #000;
+    color: #fff;
+  }
+  
+  .message-bot {
+    background: #fff;
+    color: #000;
+    border: 1px solid #000;
+  }
+}
